@@ -33,9 +33,10 @@ class TelegramDownloaderApp(ctk.CTk):
 
         self.authenticated = False
         self.download_active = False
-
         self.code_entered_event = asyncio.Event()
         self.password_entered_event = asyncio.Event()
+
+        self.last_id = None
 
         self.create_frames()
 
@@ -62,7 +63,7 @@ class TelegramDownloaderApp(ctk.CTk):
 
         self.log_box = ctk.CTkTextbox(self, height=150, state="disabled")
         self.log_box.pack(side="bottom", fill="x", padx=20, pady=10)
-        self.pause_button = ctk.CTkButton(self, text="Pausar Download", command=self.pause_download)
+        self.pause_button = ctk.CTkButton(self, text="Pausar Download", command=self.toggle_download)
         self.pause_button.pack(side="bottom", pady=5)
 
     def log(self, msg):
@@ -96,8 +97,9 @@ class TelegramDownloaderApp(ctk.CTk):
             threading.Thread(target=self.download_media_thread, daemon=True).start()
 
     def ask_code(self):
-        self.code = simpledialog.askstring("Código", "Digite o código recebido:")
-        self.loop.call_soon_threadsafe(self.code_entered_event.set)
+        if self.winfo_exists():
+            self.code = simpledialog.askstring("Código", "Digite o código recebido:")
+            self.loop.call_soon_threadsafe(self.code_entered_event.set)
 
     def ask_password(self):
         self.password = simpledialog.askstring("2FA", "Senha 2FA:", show='*')
@@ -147,21 +149,34 @@ class TelegramDownloaderApp(ctk.CTk):
         os.makedirs(self.output_dir, exist_ok=True)
         total = 0
         try:
-            async for msg in self.client.iter_messages(self.channel):
-                if not self.download_active:
-                    break
+            async for msg in self.client.iter_messages(self.channel, reverse=True):
+                while not self.download_active:
+                    await asyncio.sleep(0.5)
+
+                if self.last_id and msg.id <= self.last_id:
+                    continue
+
                 media = msg.photo or msg.video or msg.document
                 if media:
                     path = await self.client.download_media(media, file=self.output_dir)
                     self.log(f"[+] Arquivo salvo: {path}")
                     total += 1
+                    self.last_id = msg.id
+
             self.log(f"[✓] Download finalizado. Total: {total} arquivos.")
         except Exception as e:
             self.log(f"[!] Erro no download: {e}")
 
-    def pause_download(self):
-        self.download_active = False
-        self.log("[*] Download pausado.")
+    def toggle_download(self):
+        if self.download_active:
+            self.download_active = False
+            self.pause_button.configure(text="Retomar Download")
+            self.log("[*] Download pausado.")
+        else:
+            self.download_active = True
+            self.pause_button.configure(text="Pausar Download")
+            threading.Thread(target=self.download_media_thread, daemon=True).start()
+            self.log("[*] Retomando download...")
 
     def on_closing(self):
         if self.client and self.client.is_connected():
